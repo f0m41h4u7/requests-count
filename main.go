@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -10,14 +9,15 @@ import (
 )
 
 const (
-	// in seconds
-	statsInterval  = 40
-	statsPrecision = 10
+	// Interval to count stats for, in seconds
+	statsInterval = 60
+	// Granularity for saving stats, in seconds
+	statsPrecision = 1
 )
 
 func main() {
+	// Quantity of time intervals
 	statsQuants := int(statsInterval / statsPrecision)
-	fmt.Printf("statsQuant: %d\n", statsQuants)
 	serv := NewServer("127.0.0.1", "1337", "stats.txt", statsQuants)
 
 	done := make(chan os.Signal, 1)

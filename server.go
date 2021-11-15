@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
+	"encoding/json"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -15,18 +15,19 @@ import (
 )
 
 type Stats struct {
+	// Size of Buffer
+	BuffSize int `json:"buffSize"`
 	// Buffer to save last stats
-	buffer []int
-	// Iterator over the buffer
-	iter int
+	Buffer []int `json:"Buffer"`
+	// Iterator over the Buffer
+	Iter int `json:"Iter"`
 	// Current value
-	currentCount int
+	CurrentCount int `json:"CurrentCount"`
 }
 
 type Server struct {
 	http *http.Server
 
-	statsBuffSize int
 	statsFilename string
 	mx            sync.Mutex
 	stats         Stats
@@ -37,12 +38,12 @@ func NewServer(host, port, statsFile string, statsBuffSize int) *Server {
 		http: &http.Server{
 			Addr: net.JoinHostPort(host, port),
 		},
-		statsBuffSize: statsBuffSize,
 		statsFilename: statsFile,
 		stats: Stats{
-			buffer:       make([]int, statsBuffSize),
-			iter:         0,
-			currentCount: 0,
+			BuffSize:     statsBuffSize,
+			Buffer:       make([]int, statsBuffSize),
+			Iter:         0,
+			CurrentCount: 0,
 		},
 	}
 	serv.http.Handler = serv.setupRouter()
@@ -67,9 +68,9 @@ func (s *Server) statsIncrement() gin.HandlerFunc {
 			return
 		}
 		s.mx.Lock()
-		s.stats.buffer[s.stats.iter]++
-		/*fmt.Printf("statsIncrement=%d, iter=%d; [", s.stats.buffer[s.stats.iter], s.stats.iter)
-		for _, b := range s.stats.buffer {
+		s.stats.Buffer[s.stats.Iter]++
+		/*fmt.Printf("statsIncrement=%d, Iter=%d; [", s.stats.Buffer[s.stats.Iter], s.stats.Iter)
+		for _, b := range s.stats.Buffer {
 			fmt.Printf("%d, ", b)
 		}
 		fmt.Printf("]\n")*/
@@ -77,55 +78,42 @@ func (s *Server) statsIncrement() gin.HandlerFunc {
 	}
 }
 
-// Periodically called method to update data in stats buffer
+// Periodically called method to update data in stats Buffer
 func (s *Server) UpdateStats() {
 	s.mx.Lock()
-	s.stats.currentCount += s.stats.buffer[s.stats.iter]
-	s.stats.iter = ((s.stats.iter+1)%s.statsBuffSize + s.statsBuffSize) % s.statsBuffSize
-	s.stats.buffer[s.stats.iter] = 0 - s.stats.buffer[s.stats.iter]
-	//	fmt.Printf("UPDATE STATS: currentCount=%d, nextIdx=%d\n", s.stats.currentCount, s.stats.iter)
+	s.stats.CurrentCount += s.stats.Buffer[s.stats.Iter]
+	s.stats.Iter = ((s.stats.Iter+1)%s.stats.BuffSize + s.stats.BuffSize) % s.stats.BuffSize
+	s.stats.Buffer[s.stats.Iter] = 0 - s.stats.Buffer[s.stats.Iter]
+	//	fmt.Printf("UPDATE STATS: CurrentCount=%d, nextIdx=%d\n", s.stats.CurrentCount, s.stats.Iter)
 	s.mx.Unlock()
 }
 
 // Run starts Server
 func (s *Server) Run() error {
-	file, err := os.OpenFile(s.statsFilename, os.O_RDONLY|os.O_CREATE, 0666)
+	file, err := ioutil.ReadFile(s.statsFilename)
 	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	num := 0
-	i := 0
-	for scanner.Scan() {
-		num, err = strconv.Atoi(scanner.Text())
+		log.Printf("failed to read stats from file: %s", err.Error())
+	} else {
+		err = json.Unmarshal([]byte(file), &s.stats)
 		if err != nil {
-			return err
+			log.Fatalf("failed to parse stats: %s", err.Error())
 		}
-		if i == s.statsBuffSize {
-			break
-		}
-		s.stats.buffer[i] = num
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
 	}
 
 	return s.http.ListenAndServe()
 }
 
 func (s *Server) Stop() error {
-	var str string
 	s.mx.Lock()
 	defer s.mx.Unlock()
-	for _, num := range s.stats.buffer {
-		str += fmt.Sprintf("%d\n", num)
-	}
-	err := os.WriteFile(s.statsFilename, []byte(str), 0644)
+	dataBytes, err := json.Marshal(s.stats)
 	if err != nil {
-		log.Printf("failed to write stats to file: %s", err.Error())
+		log.Printf("failed to marshal stats: %s", err.Error())
+	} else {
+		err = os.WriteFile(s.statsFilename, dataBytes, 0644)
+		if err != nil {
+			log.Printf("failed to write stats to file: %s", err.Error())
+		}
 	}
 	return s.http.Close()
 }
@@ -137,5 +125,5 @@ func (s *Server) helloworld(c *gin.Context) {
 func (s *Server) getStats(c *gin.Context) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
-	c.JSON(http.StatusOK, gin.H{"interval": (time.Duration(statsInterval) * time.Second).String(), "get requests number": strconv.Itoa(s.stats.currentCount)})
+	c.JSON(http.StatusOK, gin.H{"interval": (time.Duration(statsInterval) * time.Second).String(), "get requests number": strconv.Itoa(s.stats.CurrentCount)})
 }
